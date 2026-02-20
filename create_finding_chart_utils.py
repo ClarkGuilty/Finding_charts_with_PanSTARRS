@@ -139,7 +139,6 @@ def get_brightest_sources(coords, radius_arcmin=1, count=3):
     df = df[df[magnitude_column] > 0]
     brightest = df.sort_values(by=magnitude_column).head(count).rename(
         columns={'raMean':'ra','decMean':'dec'})
-    # print(brightest)
     return brightest[['ra', 'dec', magnitude_column]]
 
 def download_panstarrs_r_band(coords, size_arcmin=2.0, output_file="ps1_image.fits"):
@@ -191,11 +190,9 @@ def create_finding_chart(fits_file, target_coords, catalog_df,
 
     # Create figure with extra width for the side panel
     fw, fh = plt.rcParams['figure.figsize']
-    # fig = plt.figure(figsize=(2.5 * fw, 1.5 * fh)) 
     fig = plt.figure(figsize=(1.5 * fw, 1*fw)) 
     
     # Create a grid: 1 row, 2 columns. 
-    # width_ratios=[3, 1] means the image is 3x wider than the text panel.
     gs = gridspec.GridSpec(1, 2, width_ratios=[2,1], wspace=0.1)
 
     # Left subplot: The Image
@@ -330,7 +327,8 @@ def get_parser():
         "--radec",
         nargs=2,
         metavar=("RA", "DEC"),
-        help="RA and Dec for a single target (provide both values)."
+        help="RA and Dec for a single target (provide both values).\n"
+        "Use angles in decimal deg, hexagesimal, or hmsdms."
     )
 
     parser.add_argument(
@@ -406,7 +404,6 @@ def main():
     else:
         print(f"Processing targets from file: {args.file}")
         
-        # df = pd.read_csv(args.file)
         df = read_catalog(args.file)
     
     for index, row in df.iterrows():
