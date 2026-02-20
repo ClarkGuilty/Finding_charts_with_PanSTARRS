@@ -1,11 +1,41 @@
 # Finding_charts_with_PanSTARRS
 
-Simple scripts to make finding charts with offsets to nearby bright source using PanSTARRS imaging and catalogs.
+Simple scripts to make finding charts with offsets to nearby bright sources using PanSTARRS imaging and catalogs.
 
 It also includes utilities to prepare observations with NGPS at Palomar Observatory.
 
+
+## Installation
+
+Having a dedicated environment is the most reliable way to use the program. Some options for this are: `Conda`, `Micromamba`, `venv`, or `uv`. Include the following packages in your environment:
+
 ```
-usage: create_finding_chart_utils.py [-h] (-f FILE | --radec RA DEC)
+requests
+pandas
+numpy
+matplotlib
+astropy
+```
+
+### Installation using `conda`/`micromamba`
+```
+conda create -n finding_charts python requests pandas numpy matplotlib astropy
+```
+Then, make sure you have activated your environment bedfore running the python script.
+```
+conda activate finding_charts
+```
+
+### Installation using pip
+It is recommended that always use pip inside an enviroment. Also, some systems use `pip3` and `python3`, so adapt accordingly.
+```
+pip install requests pandas numpy matplotlib astropy
+```
+
+## Usage
+
+```
+python create_finding_chart_utils.py [-h] (-f FILE | --radec RA DEC)
                                      [--name NAME] [--nstars NSTARS]
                                      [--chart-size CHART_SIZE]
                                      [--min-offset-radius MIN_OFFSET_RADIUS]
