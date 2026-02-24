@@ -29,8 +29,10 @@ warnings.simplefilter("ignore", AstropyWarning)
 # magnitude_column = 'rMeanKronMag'
 magnitude_column = 'rPSFMag'
 figures_path = "Figures"
+outputs_path = 'Outputs'
 
 os.makedirs(figures_path,exist_ok=True)
+os.makedirs(outputs_path,exist_ok=True)
 
 def _normalize_column(col):
     col = str(col).strip().lower()
@@ -255,6 +257,7 @@ def make_finding_chart_from_coordinates(coords,
                                         min_distance_to_target=0.5, #arcsec
                                         output_format="png",
                                         dpi=150,
+                                        output_catalog=False,
                                         ):
     if fits_name is None:
         fits_name = f"{target_name}.fits"
@@ -275,7 +278,23 @@ def make_finding_chart_from_coordinates(coords,
         # Calculate the separation
         dists = coords.separation(temp_catalog).arcsec
         brightest_df = brightest_df.loc[dists > min_distance_to_target].iloc[:n_objects]
-        
+
+
+        if output_catalog:
+            with open(join(outputs_path,target_name+'.txt'),'w') as f:
+                print("RA,Dec,rPSFMag,dRa,dDec", file=f)
+                for i in range(len(brightest_df)):
+                    row = brightest_df.iloc[i]
+                    
+                    target_ra = coords.ra.deg
+                    target_dec = coords.dec.deg
+                    
+                    dra_as = -(row.ra - target_ra) * np.cos(np.radians(target_dec)) * 3600
+                    ddec_as = -(row.dec - target_dec) * 3600
+                    
+                    print(
+                        f"{row['ra']},{row['dec']},{row['rPSFMag']},{dra_as:+.1f},{ddec_as:+.1f}",
+                        file=f)
         
         if brightest_df is not None:
             create_finding_chart(fits_name,
@@ -376,6 +395,15 @@ def get_parser():
         default=150,
         help="DPI for PNG output (ignored for PDF, default: 150)."
     )
+    
+    parser.add_argument(
+        "--output-catalog",
+        action="store_true",
+        help=(
+            "Output a catalogue with the coordinates, magnitude, "
+            "and offset of the finding chart stars to the target."
+        )
+    )
 
     return parser
 
@@ -424,6 +452,7 @@ def main():
                                             min_distance_to_target=min_distance_to_target,
                                             output_format=args.format,
                                             dpi=args.dpi,
+                                            output_catalog=args.output_catalog
                                             )
         
                     
