@@ -444,7 +444,8 @@ def main():
         search_radius = args.chart_size
         min_distance_to_target = args.min_offset_radius
         
-        make_finding_chart_from_coordinates(coords,
+        try:
+            make_finding_chart_from_coordinates(coords,
                                             target_name,
                                             search_radius,
                                             fits_name=fits_name,
@@ -454,7 +455,8 @@ def main():
                                             dpi=args.dpi,
                                             output_catalog=args.output_catalog
                                             )
-        
+        except pd.errors.EmptyDataError as E:
+            print(f"{E}. Failed to find a match in PanSTARRS for: {target_name}: at {row['RA']}, {row['Dec']}")
                     
 if __name__ == "__main__":
     main()
