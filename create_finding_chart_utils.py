@@ -18,6 +18,7 @@ from astropy.wcs import WCS
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from astropy.coordinates import SkyCoord, Angle
 from astropy import units as u
+from datetime import datetime
 from matplotlib import gridspec
 from os.path import join
 import os
@@ -28,11 +29,9 @@ warnings.simplefilter("ignore", AstropyWarning)
 
 # magnitude_column = 'rMeanKronMag'
 magnitude_column = 'rPSFMag'
-figures_path = "Figures"
-outputs_path = 'Outputs'
+orig_figures_path = "Figures"
+orig_outputs_path = 'Outputs'
 
-os.makedirs(figures_path,exist_ok=True)
-os.makedirs(outputs_path,exist_ok=True)
 
 def _normalize_column(col):
     col = str(col).strip().lower()
@@ -172,6 +171,7 @@ def download_panstarrs_r_band(coords, size_arcmin=2.0, output_file="ps1_image.fi
 
 
 def create_finding_chart(fits_file, target_coords, catalog_df,
+                         current_figures_path,
                          target_name=None,
                          output_format="png",
                          dpi=150,
@@ -244,71 +244,146 @@ def create_finding_chart(fits_file, target_coords, catalog_df,
     ax.set_xlabel('RA')
     ax.set_ylabel('Dec')
     
-    plt.savefig(join(figures_path,output_filename), 
+    plt.savefig(join(current_figures_path, output_filename), 
                 bbox_inches='tight', dpi=dpi)
     print(f"Finding chart saved to: {output_filename}")
     # plt.show()
     
+
 def make_finding_chart_from_coordinates(coords,
                                         target_name,
                                         search_radius, #in arcmins
+                                        current_figures_path,
+                                        current_outputs_path,
                                         fits_name=None,
                                         n_objects=5, #number of objects
                                         min_distance_to_target=0.5, #arcsec
+                                        min_distance_between_offsets=1, #arcsec
                                         output_format="png",
                                         dpi=150,
-                                        output_catalog=False,
+                                        output_individual_catalogues=False,
                                         ):
+    
+    results_list = []
+    
     if fits_name is None:
         fits_name = f"{target_name}.fits"
 
-    
     if download_panstarrs_r_band(coords,
                                  size_arcmin=search_radius,
                                  output_file=fits_name):
         
-        brightest_df = get_brightest_sources(coords, \
+        # Query more stars than needed to account for filtering
+        brightest_df = get_brightest_sources(coords, 
                                              radius_arcmin=search_radius/2,
-                                             count=n_objects+5)
+                                             count=n_objects + 15)
         
-        # Removing objects too close to the target source.
-        temp_catalog = SkyCoord(ra=brightest_df['ra'].values,
-                                dec=brightest_df['dec'].values, 
-                                unit='deg')
-        # Calculate the separation
-        dists = coords.separation(temp_catalog).arcsec
-        brightest_df = brightest_df.loc[dists > min_distance_to_target].iloc[:n_objects]
+        if brightest_df is None or brightest_df.empty:
+            return []
 
+        # 1. Convert found stars to SkyCoord
+        candidate_coords = SkyCoord(ra=brightest_df['ra'].values,
+                                    dec=brightest_df['dec'].values, 
+                                    unit='deg')
+        
+        # 2. Filter out objects too close to the TARGET
+        dists_to_target = coords.separation(candidate_coords).arcsec
+        mask = dists_to_target > min_distance_to_target
+        brightest_df = brightest_df[mask].reset_index(drop=True)
+        candidate_coords = candidate_coords[mask]
 
-        if output_catalog:
-            with open(join(outputs_path,target_name+'.txt'),'w') as f:
+        # 3. Filter out objects too close to EACH OTHER (Internal duplicates)
+        # We keep only the first occurrence within a 0.5" radius
+        if len(brightest_df) > 0:
+            final_indices = []
+            skipped_indices = set()
+            
+            for i in range(len(candidate_coords)):
+                if i in skipped_indices:
+                    continue
+                
+                # Compare this star to all subsequent stars
+                sep = candidate_coords[i].separation(candidate_coords[i+1:]).arcsec
+                # Find indices of neighbors within 0.5 arcsec
+                duplicates = np.where(sep < min_distance_between_offsets)[0] + (i + 1)
+                skipped_indices.update(duplicates)
+                final_indices.append(i)
+            
+            brightest_df = brightest_df.iloc[final_indices].head(n_objects)
+        
+        # 4. Process the remaining unique stars
+        target_ra = coords.ra.deg
+        target_dec = coords.dec.deg
+
+        # Helper to format angles
+        def format_coords(ra_deg, dec_deg):
+            # ra_str as HH:MM:SS.SS, dec_str as +DD:MM:SS.SS
+            ra_str = Angle(ra_deg, unit='deg').to_string(unit='hour', sep=':', precision=2, pad=True)
+            dec_str = Angle(dec_deg, unit='deg').to_string(unit='deg', sep=':', precision=1, pad=True, alwayssign=True)
+            return ra_str, dec_str
+
+        t_ra_fmt, t_dec_fmt = format_coords(target_ra, target_dec)
+        
+        row_data = {
+            "NAME": target_name,
+            "RA": t_ra_fmt,
+            "DECL": t_dec_fmt,
+            "OFFSET_RA": 0,
+            "OFFSET_DEC": 0,
+            "COMMENT": "",
+            "PRIORITY": "", "BINSPAT": "2", "BINSPECT": "2",
+            "SLITANGLE": "PA", "SLITWIDTH": "1.5", "AIRMASS_MAX": "2.5",
+            "WRANGE_LOW": "650", "WRANGE_HIGH": "680", "CHANNEL": "R",
+            "MAGNITUDE": "21.0",
+            "MAGFILTER": "z", "EXPTIME": "SNR"
+        }
+        results_list.append(row_data)
+
+        for i, (idx, row) in enumerate(brightest_df.iterrows()):
+            dra_as = -(row['ra'] - target_ra) * np.cos(np.radians(target_dec)) * 3600
+            ddec_as = -(row['dec'] - target_dec) * 3600
+            
+            t_ra_fmt_star, t_dec_fmt_star = format_coords(row['ra'], row['dec'])
+            
+            row_data = {
+                "NAME": f"{target_name}_os_{i+1}",
+                "RA": t_ra_fmt_star,
+                "DECL": t_dec_fmt_star,
+                "OFFSET_RA": round(dra_as, 2),
+                "OFFSET_DEC": round(ddec_as, 2),
+                "COMMENT": f"Ref Star {i+1} mag {row[magnitude_column]:.1f}",
+                "PRIORITY": "", "BINSPAT": "2", "BINSPECT": "2",
+                "SLITANGLE": "PA", "SLITWIDTH": "1.5", "AIRMASS_MAX": "2.5",
+                "WRANGE_LOW": "650", "WRANGE_HIGH": "680", "CHANNEL": "R",
+                "MAGNITUDE": 21.0,
+                "MAGFILTER": "z", "EXPTIME": "SNR"
+            }
+            results_list.append(row_data)
+
+        if output_individual_catalogues:
+            with open(join(current_outputs_path, target_name+'.txt'), 'w') as f:
                 print("RA,Dec,rPSFMag,dRa,dDec", file=f)
-                for i in range(len(brightest_df)):
-                    row = brightest_df.iloc[i]
-                    
-                    target_ra = coords.ra.deg
-                    target_dec = coords.dec.deg
-                    
-                    dra_as = -(row.ra - target_ra) * np.cos(np.radians(target_dec)) * 3600
-                    ddec_as = -(row.dec - target_dec) * 3600
-                    
-                    print(
-                        f"{row['ra']},{row['dec']},{row['rPSFMag']},{dra_as:+.1f},{ddec_as:+.1f}",
-                        file=f)
+                for item in results_list:
+                    print(f"{item['RA']},{item['DECL']},{item['MAGNITUDE']},{item['OFFSET_RA']},{item['OFFSET_DEC']}", file=f)
         
-        if brightest_df is not None:
+        
+        if not brightest_df.empty:
             create_finding_chart(fits_name,
                                  coords,
                                  brightest_df,
+                                 current_figures_path,
                                  target_name=target_name,
-                                 output_format = output_format,
-                                 dpi = dpi
+                                 output_format=output_format,
+                                 dpi=dpi
                                  )
                 
-        os.remove(fits_name)   
+        if os.path.exists(fits_name):
+            os.remove(fits_name)   
+            
+        return results_list
     else:
-        print(f"Download failed for {target_name}, "
-              "make sure your target is in PanSTARRS footprint (Dec > -20).")
+        print(f"Download failed for {target_name} (PanSTARRS footprint check).")
+        return []
         
 def name_from_radec(coords, survey=""):
     ra, dec = coords.to_string('hmsdms').split()
@@ -374,7 +449,7 @@ def get_parser():
     parser.add_argument(
         "--min-offset-radius",
         type=positive_float,
-        default=0.5,
+        default=2,
         # metavar="ARCSEC",
         help=(
             "Minimum distance from the target coordinate (in arcminutes) below which "
@@ -397,11 +472,18 @@ def get_parser():
     )
     
     parser.add_argument(
-        "--output-catalog",
+        "--run-name",
+        type=str,
+        default=None,
+        help="Name for this execution run (used as the folder name)."
+    )
+    
+    parser.add_argument(
+        "--output-individual-catalogues", # Renamed from --output-catalog
         action="store_true",
         help=(
-            "Output a catalogue with the coordinates, magnitude, "
-            "and offset of the finding chart stars to the target."
+            "Output a separate .txt catalogue for each target containing "
+            "reference star offsets."
         )
     )
 
@@ -411,52 +493,65 @@ def main():
     parser = get_parser()
     args = parser.parse_args()
 
+    # Determine sub-directory name
+    if args.run_name:
+        run_folder = args.run_name
+    else:
+        run_folder = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+        
+    # Construct and create the specific paths for this run
+    current_figures_path = join(orig_figures_path, run_folder)
+    current_outputs_path = join(orig_outputs_path, run_folder)
+    
+    os.makedirs(current_figures_path, exist_ok=True)
+    os.makedirs(current_outputs_path, exist_ok=True)
+
     print(f"Number of stars: {args.nstars}")
     print(f"Chart size / search diameter: {args.chart_size} arcmin")
-    print(f"Minimum offset radius: {args.min_offset_radius} arcsec")
-
-    print() #Free line
+    print(f"Minimum offset radius: {args.min_offset_radius} arcsec\n")
 
     if args.file is None:
-        print(f"Single target: RA={args.radec[0]}, Dec={args.radec[1]}")
-            
-        row_dict = {
-            'RA' : args.radec[0],
-            'Dec' : args.radec[1]
-            }
-        if args.name:
-            row_dict['name'] = args.name
-        
+        row_dict = {'RA' : args.radec[0], 'Dec' : args.radec[1]}
+        if args.name: row_dict['name'] = args.name
         df = pd.DataFrame([row_dict])
-        
     else:
         print(f"Processing targets from file: {args.file}")
-        
         df = read_catalog(args.file)
     
+    all_summary_data = [] # Global collection
+
     for index, row in df.iterrows():
-        
         coords = parse_any_coord(row['RA'], row['Dec'])
         target_name = row['name'] if 'name' in row.keys() else name_from_radec(coords)
         fits_name = f"{target_name}.fits"
 
-        n_objects = args.nstars
-        search_radius = args.chart_size
-        min_distance_to_target = args.min_offset_radius
-        
         try:
-            make_finding_chart_from_coordinates(coords,
+            target_data_list = make_finding_chart_from_coordinates(
+                                            coords,
                                             target_name,
-                                            search_radius,
+                                            args.chart_size,
+                                            current_figures_path,
+                                            current_outputs_path,
                                             fits_name=fits_name,
-                                            n_objects=n_objects,
-                                            min_distance_to_target=min_distance_to_target,
+                                            n_objects=args.nstars,
+                                            min_distance_to_target=args.min_offset_radius,
                                             output_format=args.format,
                                             dpi=args.dpi,
-                                            output_catalog=args.output_catalog
+                                            output_individual_catalogues=args.output_individual_catalogues
                                             )
+            if target_data_list:
+                all_summary_data.extend(target_data_list)
+                
         except pd.errors.EmptyDataError as E:
-            print(f"{E}. Failed to find a match in PanSTARRS for: {target_name}: at {row['RA']}, {row['Dec']}")
-                    
+            print(f"Failed to find a match for: {target_name}")
+
+    # Create the final dataframe
+    if all_summary_data:
+        final_df = pd.DataFrame(all_summary_data)
+        output_csv = join(current_outputs_path, "summary.csv")
+        final_df.to_csv(output_csv, index=False)
+        print(f"Summary catalogue saved to: {output_csv}")
+
 if __name__ == "__main__":
     main()
+
